@@ -18,9 +18,9 @@ st.set_page_config(
 # ============================================================
 # 설정 — 시트 ID 와 시트 GID
 # ============================================================
-SHEET_ID = "1agL_qDqdc6NicnaBI50J12tebDxe-TspjJRkzh4K6WA"
+SHEET_ID = "2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYITE9a-mot83vUV6SJ4OkvDdpM15saxIMU3Y"
 # 시트가 "웹에 게시"되어 있어야 함. CSV export URL 사용:
-EXPORT_URL = f"2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYITE9a-mot83vUV6SJ4OkvDdpM15saxIMU3Y"
+EXPORT_URL = f"https://docs.google.com/spreadsheets/d/e/{SHEET_ID}/pub?output=csv"
 
 # ============================================================
 # 데이터 로딩 — 5분 캐시
