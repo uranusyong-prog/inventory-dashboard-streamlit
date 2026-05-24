@@ -8,6 +8,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import re
 from collections import defaultdict
+from datetime import datetime, timezone, timedelta
+
+# 한국 시간(KST) 기준 오늘 날짜 — 자정에 캐시 무효화 트리거
+KST = timezone(timedelta(hours=9))
+def kst_today_key():
+    return datetime.now(KST).strftime("%Y-%m-%d")
 
 st.set_page_config(
     page_title="26년 부진·부동 재고 소진 대시보드",
@@ -16,17 +22,20 @@ st.set_page_config(
 )
 
 # ============================================================
-# 설정 — 시트 ID 와 시트 GID
+# 설정 — 게시된(published) 시트 URL
 # ============================================================
-SHEET_ID = "1agL_qDqdc6NicnaBI50J12tebDxe-TspjJRkzh4K6WA"
-# 시트가 "웹에 게시"되어 있어야 함. CSV export URL 사용:
-EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
+# "파일 → 공유 → 웹에 게시"로 받은 게시 전용 ID (시트 자체 권한과 무관하게 접근 가능)
+PUBLISHED_ID = "2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYlTE9a-mot83vUV6SJ4OkvDdpM15saxIMU3Y"
+SHEET_ID = "1agL_qDqdc6NicnaBI50J12tebDxe-TspjJRkzh4K6WA"  # 푸터 링크용
+# 게시된 시트의 CSV export URL — gid=0은 첫 번째 시트
+EXPORT_URL = f"https://docs.google.com/spreadsheets/d/e/{PUBLISHED_ID}/pub?output=csv&gid=0"
 
 # ============================================================
-# 데이터 로딩 — 24시간 캐시
+# 데이터 로딩 — 하루 1회 캐시 (KST 자정 기준 자동 갱신)
 # ============================================================
 @st.cache_data(ttl=86400, show_spinner="시트에서 데이터를 읽는 중…")
-def load_sheet():
+def load_sheet(day_key: str):
+    # day_key를 인자로 받으면, 날짜가 바뀌는 순간 캐시가 자동 무효화됨
     df = pd.read_csv(EXPORT_URL, header=None, dtype=str, keep_default_na=False)
     return df
 
@@ -239,10 +248,10 @@ def fmt_won(v):
 # 메인
 # ============================================================
 st.title("📦 26년 부진·부동 재고 소진 대시보드")
-st.caption("Google Sheets 실시간 연동 · 5분마다 캐시 자동 갱신")
+st.caption(f"Google Sheets 연동 · 매일 자정(KST) 자동 갱신 · 데이터 기준일: {kst_today_key()}")
 
 try:
-    df = load_sheet()
+    df = load_sheet(kst_today_key())
     data = parse_sheet(df)
 except Exception as e:
     st.error(f"시트 로딩 실패: {e}")
