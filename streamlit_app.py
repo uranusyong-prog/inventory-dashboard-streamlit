@@ -23,9 +23,9 @@ SHEET_ID = "2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYITE9a-mot83vUV6SJ
 EXPORT_URL = f"https://docs.google.com/spreadsheets/d/e/{SHEET_ID}/pub?output=csv"
 
 # ============================================================
-# 데이터 로딩 — 5분 캐시
+# 데이터 로딩 — 24시간 캐시
 # ============================================================
-@st.cache_data(ttl=300, show_spinner="시트에서 데이터를 읽는 중…")
+@st.cache_data(ttl=86400, show_spinner="시트에서 데이터를 읽는 중…")
 def load_sheet():
     df = pd.read_csv(EXPORT_URL, header=None, dtype=str, keep_default_na=False)
     return df
