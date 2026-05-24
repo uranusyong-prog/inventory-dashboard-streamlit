@@ -248,10 +248,10 @@ def fmt_won(v):
 # 메인
 # ============================================================
 st.title("📦 26년 부진·부동 재고 소진 대시보드")
-st.caption(f"Google Sheets 연동 · 매일 자정(KST) 자동 갱신 · 데이터 기준일: {kst_today_key()}")
+st.caption("Google Sheets 실시간 연동 · 5분마다 캐시 자동 갱신")
 
 try:
-    df = load_sheet(kst_today_key())
+    df = load_sheet()
     data = parse_sheet(df)
 except Exception as e:
     st.error(f"시트 로딩 실패: {e}")
