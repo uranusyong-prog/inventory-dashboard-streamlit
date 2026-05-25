@@ -1,20 +1,13 @@
 """
 26년 부진·부동 재고 소진 대시보드 (Streamlit Cloud)
-Google Sheets 라이브 연동 + 시안(STANDALONE) 스타일 재현
+Google Sheets 라이브 연동
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import re
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
-
-# ============================================================
-# 0. 페이지 설정
-# ============================================================
-KST = timezone(timedelta(hours=9))
-def kst_today_key():
-    return datetime.now(KST).strftime("%Y-%m-%d")
 
 st.set_page_config(
     page_title="26년 부진·부동 재고 소진 대시보드",
@@ -23,92 +16,20 @@ st.set_page_config(
 )
 
 # ============================================================
-# 1. 전역 CSS — 시안 톤 (배경색 KPI · 인사이트 박스 · 산식 바)
+# 설정 — 시트 ID 와 시트 GID
 # ============================================================
-st.markdown("""
-<style>
-  /* 기본 폰트 */
-  html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
-
-  /* STANDALONE 뱃지 */
-  .standalone-badge {
-    display: inline-block; background: #2563EB; color: #fff;
-    font-size: 12px; font-weight: 700; padding: 4px 10px;
-    border-radius: 6px; vertical-align: middle; margin-left: 8px;
-  }
-
-  /* KPI 카드 컨테이너 */
-  .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 16px 0 12px; }
-  .kpi {
-    border-radius: 10px; padding: 18px 16px; text-align: center;
-    border: 1px solid rgba(0,0,0,0.05);
-  }
-  .kpi .label { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 6px; }
-  .kpi .value { font-size: 28px; font-weight: 800; color: #111; }
-  .kpi.total    { background: #F4F4F5; }
-  .kpi.emergency{ background: #FEECEC; }
-  .kpi.emergency .value { color: #DC2626; }
-  .kpi.warning  { background: #FEF6E0; }
-  .kpi.warning  .value { color: #B45309; }
-  .kpi.caution  { background: #F4F4F5; }
-  .kpi.amount   { background: #F4F4F5; }
-  .kpi.sellrate { background: #E8F5E9; }
-  .kpi.sellrate .value { color: #1E7F36; }
-
-  /* 위험 점수 산식 바 */
-  .formula-bar {
-    background: #F4F4F5; border-radius: 8px; padding: 10px 14px;
-    font-size: 13px; color: #333; margin: 10px 0 18px;
-    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
-  }
-  .formula-bar .lbl { font-weight: 700; color: #555; background: #fff;
-                      padding: 3px 8px; border-radius: 4px; border: 1px solid #ddd; }
-  .formula-bar .sep { color: #bbb; }
-  .formula-bar .em-red    { color: #DC2626; font-weight: 700; }
-  .formula-bar .em-orange { color: #D97706; font-weight: 700; }
-  .formula-bar .em-blue   { color: #2563EB; font-weight: 700; }
-
-  /* 인사이트 박스 4종 */
-  .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
-  .insight {
-    border-radius: 10px; padding: 14px 16px; font-size: 13.5px; line-height: 1.55;
-    border-left: 4px solid #ccc;
-  }
-  .insight .title { font-weight: 700; margin-bottom: 6px; font-size: 14px; }
-  .insight.blue   { background: #EFF6FF; border-color: #3B82F6; }
-  .insight.blue   .title { color: #1D4ED8; }
-  .insight.red    { background: #FEF2F2; border-color: #EF4444; }
-  .insight.red    .title { color: #B91C1C; }
-  .insight.green  { background: #ECFDF5; border-color: #10B981; }
-  .insight.green  .title { color: #047857; }
-  .insight.yellow { background: #FFFBEB; border-color: #F59E0B; }
-  .insight.yellow .title { color: #B45309; }
-
-  /* 인사이트 섹션 헤더 */
-  .insight-section-title {
-    font-weight: 800; font-size: 16px; margin: 8px 0 4px;
-  }
-  .insight-section-title .auto-tag {
-    float: right; font-size: 11px; color: #888; font-weight: 500;
-  }
-</style>
-""", unsafe_allow_html=True)
-
-# ============================================================
-# 2. 시트 설정 — 게시된(published) CSV URL
-# ============================================================
-PUBLISHED_ID = "2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYlTE9a-mot83vUV6SJ4OkvDdpM15saxIMU3Y"
 SHEET_ID = "1agL_qDqdc6NicnaBI50J12tebDxe-TspjJRkzh4K6WA"
-EXPORT_URL = f"https://docs.google.com/spreadsheets/d/e/{PUBLISHED_ID}/pub?output=csv&gid=0"
+# 시트가 "웹에 게시"되어 있어야 함. CSV export URL 사용:
+EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
 
-@st.cache_data(ttl=86400, show_spinner="시트에서 데이터를 읽는 중…")
-def load_sheet(day_key: str):
+# ============================================================
+# 데이터 로딩 — 5분 캐시
+# ============================================================
+@st.cache_data(ttl=300, show_spinner="시트에서 데이터를 읽는 중…")
+def load_sheet():
     df = pd.read_csv(EXPORT_URL, header=None, dtype=str, keep_default_na=False)
     return df
 
-# ============================================================
-# 3. 유틸
-# ============================================================
 def to_num(v):
     if v is None or v == "":
         return 0
@@ -126,43 +47,27 @@ def to_pct(v):
     n = to_num(s)
     return n / 100 if (has or n > 1.5) else n
 
-def fmt_won(v):
-    if v is None or v == 0:
-        return "-"
-    v = float(v)
-    if abs(v) >= 1e8:
-        return f"{v/1e8:.2f}억원"
-    if abs(v) >= 1e7:
-        return f"{round(v/1e7)}천만원"
-    if abs(v) >= 1e6:
-        return f"{round(v/1e6)}백만원"
-    if abs(v) >= 1e4:
-        return f"{round(v/1e4):,}만원"
-    return f"{round(v):,}원"
-
 # ============================================================
-# 4. 시트 파싱
+# 시트 파싱
 # ============================================================
-CHANNEL_NAMES = ("중국", "글로벌", "글로벌EC", "오프라인", "온라인", "일본", "미주")
-
 def parse_sheet(df):
     rows = df.values.tolist()
 
-    # --- 4-1. 채널 요약: 행 길이에 관계없이 첫 25행에서 채널명 매칭 ---
+    # 채널 요약 (8컬럼 첫 영역)
     channels = {}
-    for row in rows[:25]:
-        if not row:
+    for row in rows[:15]:
+        if len(row) < 8:
             continue
-        name = str(row[0]).strip() if len(row) > 0 else ""
-        if name in CHANNEL_NAMES:
-            # 컬럼 위치 안전 접근
-            sku = int(to_num(row[1])) if len(row) > 1 else 0
-            assigned = to_num(row[2]) if len(row) > 2 else 0
-            remain   = to_num(row[3]) if len(row) > 3 else 0
-            consumed = to_num(row[4]) if len(row) > 4 else 0
-            channels[name] = {"sku": sku, "assigned": assigned, "remain": remain, "consumed": consumed}
+        name = str(row[0]).strip()
+        if name in ("중국", "글로벌", "글로벌EC", "오프라인", "온라인", "일본", "미주"):
+            channels[name] = {
+                "sku": int(to_num(row[1])),
+                "assigned": to_num(row[2]),
+                "remain": to_num(row[3]),
+                "consumed": to_num(row[4]),
+            }
 
-    # --- 4-2. 메인 헤더 탐색 (40컬럼 부진 SKU 영역) ---
+    # 메인 헤더 (40컬럼)
     main_h_idx = -1
     main_hdr = None
     for i, row in enumerate(rows):
@@ -173,7 +78,7 @@ def parse_sheet(df):
             break
 
     if main_h_idx == -1:
-        return {"channels": channels, "items": [], "dormant_items": [], "error": "메인 헤더를 찾지 못함"}
+        return {"channels": channels, "items": [], "error": "메인 헤더를 찾지 못함"}
 
     iDept, iCode, iName = 1, 2, 3
     iBase, iAvail, iRate, iAmount, iGrade = 4, 5, 8, 9, 10
@@ -211,16 +116,18 @@ def parse_sheet(df):
             "is_dormant": True,
         })
 
-    # --- 4-3. 8컬럼 부서별 영역 ---
+    # 8컬럼 부서별 영역 (213~ 부근)
     sku_8col = {}
     for i, row in enumerate(rows):
-        if len(row) < 8 or i < 200 or i > 450:
+        if len(row) < 8:
+            continue
+        if i < 200 or i > 450:
             continue
         code = str(row[2]).strip()
         if not re.match(r"^B\w+", code):
             continue
         dept = str(row[1]).strip()
-        if dept not in CHANNEL_NAMES:
+        if dept not in ("중국", "글로벌", "글로벌EC", "오프라인", "온라인", "일본", "미주"):
             continue
         base = to_num(row[6])
         current = to_num(row[7])
@@ -229,34 +136,27 @@ def parse_sheet(df):
         sku_8col[code]["base"] += base
         sku_8col[code]["current"] += current
 
-    # --- 4-4. 18컬럼 "현재고 업데이트" 영역 매핑 ---
-    # A(0)=상품코드, D(3)=유통기한, E(4)=가용재고, F(5)=잔존월수, K(10)=위험점수
-    expiry_by_code = defaultdict(list)        # [(YYYY-MM, avail), ...]
-    expiry_rows_by_code = defaultdict(list)   # [(exp_date_raw, remaining, avail), ...]
-    near_expiry_by_code = defaultdict(int)
-    total_near_6m = 0
+    # 18컬럼 위험점수
     score_by_code = {}
+    expiry_by_code = defaultdict(list)
+    near_expiry_by_code = defaultdict(int)
     for row in rows:
         if len(row) != 18:
             continue
         code = str(row[0]).strip()
         if not re.match(r"^B\w+", code):
             continue
-        exp_date = str(row[3]).strip()        # D열: 유통기한
-        avail = int(to_num(row[4]))           # E열: 가용재고
-        remaining = to_num(row[5])            # F열: 잔존월수
-        total_score = to_num(row[10])         # K열: 위험점수 (시트 계산값)
+        avail = int(to_num(row[3]))
+        exp_date = str(row[4]).strip()
+        remaining = to_num(row[5])
+        total_score = to_num(row[10])
         if exp_date and avail > 0:
             m = exp_date[:7] if re.match(r"^\d{4}-\d{2}", exp_date) else exp_date
             expiry_by_code[code].append((m, avail))
-            expiry_rows_by_code[code].append((exp_date, remaining, avail))
             if remaining and remaining <= 6:
                 near_expiry_by_code[code] += avail
-                total_near_6m += avail
         if total_score > 0:
-            # 시트의 K열은 SUMIF로 이미 항목별 합계 → 코드당 한 번만 채택
-            # 라인마다 같은 값이 반복되므로 max로 안전하게 보존
-            score_by_code[code] = max(score_by_code.get(code, 0), int(round(total_score)))
+            score_by_code[code] = int(total_score)
 
     expiry_clean = {}
     for code, lst in expiry_by_code.items():
@@ -265,7 +165,7 @@ def parse_sheet(df):
             by_month[m] += q
         expiry_clean[code] = sorted(by_month.items())
 
-    # --- 4-5. 부진 외 SKU 가상행 ---
+    # 부진 외 SKU 가상행 생성
     non_dormant_items = []
     for code, info in sku_8col.items():
         if code in dormant_codes:
@@ -285,19 +185,24 @@ def parse_sheet(df):
             "is_dormant": False,
         })
 
-    # --- 4-6. 등급 분류 ---
-    # 점수 기반 분류만 신뢰 (시트 grade는 무시) → 점수 없으면 amount 환산 점수로 보조 산정
+    # 등급 분류
     def classify(it):
         score = score_by_code.get(it["code"])
-        if score is None:
-            # 점수가 없으면 금액(원)을 10만 단위 환산해서 보조 점수로 사용
-            score = round(it["amount"] / 100000)
-        if score > 100:
-            return "비상", score
-        elif score >= 50:
-            return "경고", score
-        else:
-            return "주의", score
+        if score is not None:
+            if score > 100:
+                return "비상", score
+            elif score >= 50:
+                return "경고", score
+            else:
+                return "주의", score
+        if it["level"] in ("비상", "경고", "주의"):
+            return it["level"], round(it["amount"] / 100000)
+        a = it["amount"]
+        if a >= 1e8:
+            return "비상", round(a / 100000)
+        if a >= 3e7:
+            return "경고", round(a / 100000)
+        return "주의", round(a / 100000)
 
     all_items = dormant_items + non_dormant_items
     for it in all_items:
@@ -311,26 +216,33 @@ def parse_sheet(df):
         "channels": channels,
         "items": all_items,
         "dormant_items": dormant_items,
-        "total_near_6m": total_near_6m,
     }
 
 # ============================================================
-# 5. 헤더
+# 한국식 금액 포맷
 # ============================================================
-st.markdown(
-    f'<h1 style="margin-bottom:4px;">📦 26년 부진·부동 재고 소진 대시보드'
-    f'<span class="standalone-badge">LIVE</span></h1>'
-    f'<div style="color:#666; font-size:13px; margin-bottom:14px;">'
-    f'Google Sheets 연동 · 매일 자정(KST) 자동 갱신 · 수량: EA · 금액: 원 · 데이터 기준일: {kst_today_key()}'
-    f'</div>',
-    unsafe_allow_html=True,
-)
+def fmt_won(v):
+    if v is None or v == 0:
+        return "-"
+    v = float(v)
+    if abs(v) >= 1e8:
+        return f"{v/1e8:.2f}억원"
+    if abs(v) >= 1e7:
+        return f"{round(v/1e7)}천만원"
+    if abs(v) >= 1e6:
+        return f"{round(v/1e6)}백만원"
+    if abs(v) >= 1e4:
+        return f"{round(v/1e4):,}만원"
+    return f"{round(v):,}원"
 
 # ============================================================
-# 6. 데이터 로드
+# 메인
 # ============================================================
+st.title("📦 26년 부진·부동 재고 소진 대시보드")
+st.caption("Google Sheets 실시간 연동 · 5분마다 캐시 자동 갱신")
+
 try:
-    df = load_sheet(kst_today_key())
+    df = load_sheet()
     data = parse_sheet(df)
 except Exception as e:
     st.error(f"시트 로딩 실패: {e}")
@@ -338,20 +250,19 @@ except Exception as e:
     st.stop()
 
 if not data["items"]:
-    st.error(f"메인 데이터를 찾지 못했습니다. ({data.get('error','')})")
+    st.error("메인 데이터를 찾지 못했습니다.")
+    st.json(data.get("error", {}))
     st.stop()
 
 channels = data["channels"]
 all_items = data["items"]
 dormant_items = data["dormant_items"]
-total_near_6m = data.get("total_near_6m", 0)
 
+# 필터링 (90% 이상 제외)
 shown = [i for i in all_items if i["rate"] < 0.9]
 excluded_count = len(all_items) - len(shown)
 
-# ============================================================
-# 7. 사이드바
-# ============================================================
+# 사이드바
 with st.sidebar:
     st.header("필터")
     depts = ["전체"] + sorted(set(i["dept"] for i in shown))
@@ -366,127 +277,36 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# ============================================================
-# 8. KPI 계산 — 채널 합계 + 부진 SKU 백업 경로
-# ============================================================
-emergency = sum(1 for i in all_items if i["level"] == "비상")
-warning   = sum(1 for i in all_items if i["level"] == "경고")
-caution   = sum(1 for i in all_items if i["level"] == "주의")
-cleanup_amount = sum(i["amount"] for i in dormant_items)
+# 필터 적용
+filtered = shown
+if sel_dept != "전체":
+    filtered = [i for i in filtered if i["dept"] == sel_dept]
+if sel_grade != "전체":
+    filtered = [i for i in filtered if i["level"] == sel_grade]
 
-# 채널 요약 우선, 실패시 부진 SKU base/shipped 합으로 백업
+# KPI
 total_assigned = sum(c["assigned"] for c in channels.values())
 total_consumed = sum(c["consumed"] for c in channels.values())
-if total_assigned <= 0:
-    total_assigned = sum(i["base"] for i in dormant_items)
-    total_consumed = sum(i["shipped"] for i in dormant_items)
-sell_rate = (total_consumed / total_assigned) if total_assigned > 0 else 0
+sell_rate = total_consumed / total_assigned if total_assigned > 0 else 0
+emergency = sum(1 for i in all_items if i["level"] == "비상")
+warning = sum(1 for i in all_items if i["level"] == "경고")
+caution = sum(1 for i in all_items if i["level"] == "주의")
+cleanup_amount = sum(i["amount"] for i in dormant_items)
 
-# ============================================================
-# 9. KPI 카드 (시안 톤)
-# ============================================================
-st.markdown(f"""
-<div class="kpi-row">
-  <div class="kpi total"><div class="label">총 품목</div><div class="value">{len(all_items)}건</div></div>
-  <div class="kpi emergency"><div class="label">🔴 비상</div><div class="value">{emergency}건</div></div>
-  <div class="kpi warning"><div class="label">🟡 경고</div><div class="value">{warning}건</div></div>
-  <div class="kpi caution"><div class="label">⚪ 주의</div><div class="value">{caution}건</div></div>
-  <div class="kpi amount"><div class="label">정리 대상 금액</div><div class="value">{fmt_won(cleanup_amount)}</div></div>
-  <div class="kpi sellrate"><div class="label">재고 소진율</div><div class="value">{sell_rate*100:.1f}%</div></div>
-</div>
-""", unsafe_allow_html=True)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("총 품목", f"{len(all_items)}건")
+c2.metric("🔴 비상", f"{emergency}건")
+c3.metric("🟡 경고", f"{warning}건")
+c4.metric("⚪ 주의", f"{caution}건")
+c5.metric("정리 대상 금액", fmt_won(cleanup_amount))
+c6.metric("재고 소진율", f"{sell_rate*100:.1f}%")
 
-# ============================================================
-# 10. 위험 점수 산식 바
-# ============================================================
-st.markdown("""
-<div class="formula-bar">
-  <span class="lbl">위험 점수</span>
-  <span>Σ (잔존유통기한 점수 × 가용재고 × 원가) ÷ 100,000</span>
-  <span class="sep">|</span>
-  <span class="lbl">점수</span>
-  <span><span class="em-red">≤12M·10</span> · <span class="em-orange">≤18M·5</span> · <span class="em-blue">≤24M·2</span> · 그외·1</span>
-  <span class="sep">|</span>
-  <span class="lbl">등급</span>
-  <span>주의&lt;50 · <span class="em-orange">경고 50~100</span> · <span class="em-red">비상&gt;100</span></span>
-</div>
-""", unsafe_allow_html=True)
+st.info(
+    "**위험도 분류 기준** — 시트 등급 컬럼 우선. 시안 사양: 비상 > 100점 · 경고 50~100점 · 주의 < 50점"
+)
 
-# ============================================================
-# 11. 주간 재고 분석 인사이트
-# ============================================================
-ship_now = sum(i["ship4w"] for i in dormant_items)
-ship_prev = sum(i["ship4w_prev"] for i in dormant_items)
-momentum = ((ship_now - ship_prev) / ship_prev * 100) if ship_prev > 0 else 0
-momentum_sign = "+" if momentum >= 0 else ""
-momentum_msg = "소진 모멘텀 회복 중." if momentum >= 0 else "소진 모멘텀 둔화."
-
-by_dept_full = defaultdict(lambda: {"amount": 0, "emergency": 0, "consumed": 0, "assigned": 0})
-for it in dormant_items:
-    by_dept_full[it["dept"]]["amount"] += it["amount"]
-    if it["level"] == "비상":
-        by_dept_full[it["dept"]]["emergency"] += 1
-for d, c in channels.items():
-    by_dept_full[d]["consumed"] = c["consumed"]
-    by_dept_full[d]["assigned"] = c["assigned"]
-
-top_dept = max(by_dept_full.items(), key=lambda x: x[1]["amount"]) if by_dept_full else None
-if top_dept:
-    d_name, d_v = top_dept
-    pct_of_total = (d_v["amount"] / cleanup_amount * 100) if cleanup_amount > 0 else 0
-    d_rate = (d_v["consumed"] / d_v["assigned"] * 100) if d_v["assigned"] > 0 else 0
-    dept_items = [i for i in all_items if i["dept"] == d_name and i["level"] == "비상"]
-    top_sku = max(dept_items, key=lambda x: x["score"]) if dept_items else None
-    sku_line = f"최우선: {top_sku['name']} ({top_sku['code']}, 위험점수 {top_sku['score']})" if top_sku else ""
-    dept_msg = (f"{d_name} 부진 정리 대상 {fmt_won(d_v['amount'])} (부진 전체의 {pct_of_total:.1f}%) · "
-                f"비상 {d_v['emergency']}건. 채널 전체 소진율 {d_rate:.1f}%. {sku_line}")
-else:
-    dept_msg = "부서 데이터가 없습니다."
-    d_name = "-"
-
-total_avail = sum(i["avail"] for i in all_items)
-near_pct = (total_near_6m / total_avail * 100) if total_avail > 0 else 0
-if near_pct < 5:
-    expiry_msg = (f"유통기한 6개월 이내 재고 {total_near_6m:,} EA (전체의 {near_pct:.1f}%). "
-                  f"단기 폐기 위험은 낮음 — 24개월 이상 장기 재고 분기별 소진 계획 우선.")
-else:
-    expiry_msg = (f"유통기한 6개월 이내 재고 {total_near_6m:,} EA (전체의 {near_pct:.1f}%). "
-                  f"단기 폐기 위험 — 즉시 채널 다변화·할인 검토 필요.")
-
-stagnant = sorted([i for i in dormant_items if i["ship4w"] == 0], key=lambda x: -x["amount"])[:3]
-if stagnant:
-    s_sum = sum(s["amount"] for s in stagnant)
-    s_list = " · ".join(f"{s['name']}({s['amount']/1e8:.2f}억)" for s in stagnant)
-    stagnant_msg = (f"최근 4주 출고 0건이면서 위험금액 상위 3건: {s_list}. "
-                    f"합계 {fmt_won(s_sum)}, B2B/핸디샵 전환 등 강제 채널 필요.")
-else:
-    stagnant_msg = "최근 4주 출고 0건인 부진 SKU 없음."
-
-st.markdown(f"""
-<div class="insight-section-title">📋 주간 재고 분석 인사이트 <span class="auto-tag">자동 분석</span></div>
-<div class="insight-grid">
-  <div class="insight blue">
-    <div class="title">📈 재고 분석 추이 ① · 출고 모멘텀</div>
-    부진 SKU 최근 4주(17W~20W) 출고 {ship_now:,} EA, 직전 4주(13W~16W) {ship_prev:,} EA 대비 <b>{momentum_sign}{momentum:.1f}%</b>. {momentum_msg}
-  </div>
-  <div class="insight red">
-    <div class="title">🔴 실천 필요 부서: {d_name}</div>
-    {dept_msg}
-  </div>
-  <div class="insight green">
-    <div class="title">📊 재고 분석 추이 ② · 유통기한 임박</div>
-    {expiry_msg}
-  </div>
-  <div class="insight yellow">
-    <div class="title">⚠️ 실천 필요 품목: 정체 SKU</div>
-    {stagnant_msg}
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ============================================================
-# 12. 부서별 정리 대상 금액 + 위험도 분포
-# ============================================================
+# 부서별 정리 대상 금액
+st.subheader("부서별 정리 대상 금액")
 by_dept = defaultdict(lambda: {"amount": 0, "avail": 0})
 for it in dormant_items:
     by_dept[it["dept"]]["amount"] += it["amount"]
@@ -498,172 +318,105 @@ dept_df = pd.DataFrame([
 
 col_a, col_b = st.columns([1.4, 1])
 with col_a:
-    st.subheader("부서별 정리 대상 금액")
-    fig = px.bar(dept_df, x="부서", y="정리 금액(원)",
-                 text=dept_df["정리 금액(원)"].apply(fmt_won))
+    fig = px.bar(
+        dept_df, x="부서", y="정리 금액(원)",
+        text=dept_df["정리 금액(원)"].apply(fmt_won),
+    )
     fig.update_traces(marker_color="#378ADD", textposition="outside")
-    fig.update_yaxes(tickformat=",.0f",
+    fig.update_yaxes(
+        tickformat=",.0f",
         tickvals=[0, 1e8, 2e8, 3e8, 4e8, 5e8, 6e8],
-        ticktext=["0원", "1억원", "2억원", "3억원", "4억원", "5억원", "6억원"])
-    fig.update_layout(height=340, margin=dict(t=10, b=20))
+        ticktext=["0원", "1억원", "2억원", "3억원", "4억원", "5억원", "6억원"],
+    )
+    fig.update_layout(height=320, margin=dict(t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
 with col_b:
-    st.subheader("위험도 분포 (금액 비중)")
+    # 위험도 분포 (금액)
     level_amount = {"비상": 0, "경고": 0, "주의": 0}
     for it in shown:
         level_amount[it["level"]] += it["amount"]
     pie_df = pd.DataFrame([{"등급": k, "금액": v} for k, v in level_amount.items()])
-    fig = px.pie(pie_df, names="등급", values="금액", color="등급",
-                 color_discrete_map={"비상": "#E24B4A", "경고": "#EF9F27", "주의": "#888780"})
+    fig = px.pie(
+        pie_df, names="등급", values="금액",
+        color="등급",
+        color_discrete_map={"비상": "#E24B4A", "경고": "#EF9F27", "주의": "#888780"},
+    )
     fig.update_traces(textinfo="label+percent")
-    fig.update_layout(height=340, margin=dict(t=10, b=20))
+    fig.update_layout(height=320, margin=dict(t=20, b=20), title="위험도 분포 (금액 비중)")
     st.plotly_chart(fig, use_container_width=True)
 
-# ============================================================
-# 13. 필터 적용 후 상세 테이블
-# ============================================================
-filtered = shown
-if sel_dept != "전체":
-    filtered = [i for i in filtered if i["dept"] == sel_dept]
-if sel_grade != "전체":
-    filtered = [i for i in filtered if i["level"] == sel_grade]
-
+# 위험 품목 상세
 st.subheader(f"위험 품목 상세 ({len(filtered)}건 표시 · 소진율 90% 이상 {excluded_count}건 제외)")
-priority = sorted(filtered, key=lambda x: (-x["score"] if x["score"] > 0 else 0, -x["amount"]))
+priority = sorted(filtered, key=lambda x: (-x["score"] if x["score"] > 0 else 0, -x["amount"]))[:30]
+detail_df = pd.DataFrame([
+    {
+        "위험도": r["level"],
+        "부서": r["dept"],
+        "상품코드": r["code"],
+        "상품명": r["name"],
+        "가용재고": r["avail"],
+        "소진율": f'{r["rate"]*100:.1f}%',
+        "금액": fmt_won(r["amount"]),
+        "위험점수": r["score"],
+    } for r in priority
+])
+st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
-def fmt_eok(v):
-    """위험 품목 상세 전용 — 항상 억원 단위, 소수점 2자리."""
-    if v is None or v == 0:
-        return "-"
-    return f"{float(v)/1e8:.2f}억원"
-
-# 행 클릭 시 펼치는 UI 스타일
-st.markdown("""
-<style>
-  .detail-header { display: grid; grid-template-columns: 80px 90px 110px 1fr 110px 110px 80px 110px 90px;
-                   gap: 8px; padding: 10px 12px; background: #F9FAFB; border-radius: 6px;
-                   font-weight: 700; font-size: 13px; color: #444; margin: 8px 0 4px; }
-  .detail-header div { text-align: right; }
-  .detail-header div:nth-child(1),
-  .detail-header div:nth-child(2),
-  .detail-header div:nth-child(3),
-  .detail-header div:nth-child(4) { text-align: left; }
-  .badge-emer { background: #FEECEC; color: #B91C1C; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
-  .badge-warn { background: #FEF6E0; color: #92400E; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
-  .badge-caut { background: #F4F4F5; color: #555;    padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
-</style>
-""", unsafe_allow_html=True)
-
-# 헤더 행
-st.markdown(
-    '<div class="detail-header">'
-    '<div>위험도</div><div>부서</div><div>상품코드</div><div>상품명</div>'
-    '<div>가용재고</div><div>출고수량</div><div>소진율</div><div>금액</div><div>위험점수</div>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-def _badge(level):
-    if level == "비상":
-        return '<span class="badge-emer">비상</span>'
-    if level == "경고":
-        return '<span class="badge-warn">경고</span>'
-    return '<span class="badge-caut">주의</span>'
-
-for r in priority:
-    # expander label은 plain text만 지원 → 그리드 컬럼은 expander 내부에 다시 그리고,
-    # label에는 한 줄짜리 요약을 넣는다.
-    label = (
-        f'  [{r["level"]}]  {r["dept"]:<6}  {r["code"]:<10}  {r["name"]}'
-        f'   |  가용 {r["avail"]:,} EA  ·  출고 {r["shipped"]:,} EA'
-        f'  ·  소진율 {r["rate"]*100:.1f}%  ·  {fmt_eok(r["amount"])}  ·  위험점수 {r["score"]:,}'
-    )
-    with st.expander(label, expanded=False):
-        # 상단 메타 한 줄 (HTML로 색 강조)
-        st.markdown(
-            f'<div style="margin-bottom:8px">'
-            f'{_badge(r["level"])} &nbsp; '
-            f'<b>{r["code"]}</b> · {r["name"]} · '
-            f'부서 <b>{r["dept"]}</b> · 가용재고 <b>{r["avail"]:,} EA</b> · '
-            f'출고수량 <b>{r["shipped"]:,} EA</b> · 소진율 <b>{r["rate"]*100:.1f}%</b> · '
-            f'금액 <b>{fmt_eok(r["amount"])}</b> · 위험점수 <b>{r["score"]:,}</b>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(f'{r["name"]} · 유통기한별 재고')
-        exp_list = r.get("expiry", [])
-        if exp_list:
-            # YYYY-MM 단위로 합산
-            agg = defaultdict(int)
-            for m, q in exp_list:
-                key = str(m)[:7] if re.match(r"^\d{4}-\d{2}", str(m)) else str(m)
-                agg[key] += int(q)
-            # 정렬해서 "YYYY-MM   —   X,XXX EA" 한 줄씩 출력
-            lines_html = []
-            for key in sorted(agg.keys()):
-                lines_html.append(
-                    f'<div style="display:flex; gap:24px; padding:3px 0; font-size:13.5px;">'
-                    f'<span style="min-width:90px; color:#374151;">{key}</span>'
-                    f'<span style="color:#111; font-weight:600;">{agg[key]:,} EA</span>'
-                    f'</div>'
-                )
-            st.markdown("".join(lines_html), unsafe_allow_html=True)
-        else:
-            st.info("유통기한 데이터가 없습니다.")
-        near = r.get("near_expiry", 0)
-        if near:
-            st.caption(f"※ 유통기한 6개월 이내 임박 수량: {near:,} EA")
-
-# ============================================================
-# 14. 부서별 4주 출고 추이 + Top/Bottom 5
-# ============================================================
+# 부서별 4주 출고 추이
 st.subheader("부서별 최근 4주 출고 추이 (17W~20W)")
+dept_w = defaultdict(lambda: [0, 0, 0, 0])
+for it in dormant_items:
+    # 메인 시트 raw 데이터를 다시 가져오긴 어려우니, 합계만 표시
+    pass
 trend_data = []
 for d in sorted(by_dept.keys()):
     items_d = [i for i in dormant_items if i["dept"] == d]
     if items_d:
-        trend_data.append({"부서": d, "4주 출고(EA)": sum(i["ship4w"] for i in items_d)})
-if trend_data:
-    trend_df = pd.DataFrame(trend_data)
-    fig_trend = px.bar(trend_df, x="부서", y="4주 출고(EA)", text="4주 출고(EA)")
-    fig_trend.update_traces(marker_color="#3B82F6", textposition="outside")
-    fig_trend.update_layout(height=320, margin=dict(l=20, r=20, t=10, b=20), yaxis_title="EA")
-    st.plotly_chart(fig_trend, use_container_width=True)
+        ship4 = sum(i["ship4w"] for i in items_d)
+        trend_data.append({"부서": d, "4주 출고(EA)": ship4})
+trend_df = pd.DataFrame(trend_data)
+st.bar_chart(trend_df.set_index("부서"))
 
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown("##### 🚀 4주 출고 Top 5 (부진 SKU)")
-    top5 = sorted(dormant_items, key=lambda x: -x["ship4w"])[:5]
-    st.dataframe(pd.DataFrame([{
-        "상품코드": i["code"], "상품명": i["name"],
-        "4주 출고": f'{i["ship4w"]:,}', "부서": i["dept"]
-    } for i in top5]), use_container_width=True, hide_index=True)
-with c2:
-    st.markdown("##### 🛑 4주 출고 Bottom 5 (정체 SKU)")
-    bot5 = sorted(dormant_items, key=lambda x: x["ship4w"])[:5]
-    st.dataframe(pd.DataFrame([{
-        "상품코드": i["code"], "상품명": i["name"],
-        "4주 출고": f'{i["ship4w"]:,}', "부서": i["dept"]
-    } for i in bot5]), use_container_width=True, hide_index=True)
+# Top/Bottom 5
+col_t, col_b = st.columns(2)
+with col_t:
+    st.subheader("🚀 소진율 Top 5 (우수)")
+    valid = [i for i in dormant_items if i["base"] > 0 and i["rate"] < 0.9]
+    by_w4 = sorted(valid, key=lambda x: -(x["ship4w"] / x["base"]))[:5]
+    top_df = pd.DataFrame([{
+        "상품명": i["name"][:30], "부서": i["dept"],
+        "4주 출고(EA)": i["ship4w"],
+        "소진율": f'{i["ship4w"]/i["base"]*100:.1f}%',
+    } for i in by_w4])
+    st.dataframe(top_df, use_container_width=True, hide_index=True)
 
-# ============================================================
-# 15. 손실 비용 (추정)
-# ============================================================
+with col_b:
+    st.subheader("⚠️ 소진율 Bottom 5 (조치)")
+    by_w4_low = sorted(valid, key=lambda x: x["ship4w"] / x["base"])[:5]
+    bot_df = pd.DataFrame([{
+        "상품명": i["name"][:30], "부서": i["dept"],
+        "4주 출고(EA)": i["ship4w"],
+        "소진율": f'{i["ship4w"]/i["base"]*100:.1f}%',
+    } for i in by_w4_low])
+    st.dataframe(bot_df, use_container_width=True, hide_index=True)
+
+# 손실 비용
 st.subheader("💸 과부진재고 예상 손실 비용 (부서별)")
 st.caption("산식: 보관료 + 폐기 비용(가용재고×원가) + 미판매 GP(가용재고×판매원가)")
 loss_data = []
 for d, v in sorted(by_dept.items(), key=lambda x: -x[1]["amount"]):
-    dispose = v["amount"]; gp = dispose * 1.25; store = v["avail"] * 200
+    dispose = v["amount"]
+    gp = dispose * 1.25  # 임시: 판매원가 = 원가 × 1.25
+    store = v["avail"] * 200  # 임시: EA당 200원
+    total = store + dispose + gp
     loss_data.append({
         "부서": d, "보관료": fmt_won(store), "폐기 비용": fmt_won(dispose),
-        "미판매 GP": fmt_won(gp), "합계": fmt_won(store + dispose + gp),
+        "미판매 GP": fmt_won(gp), "합계": fmt_won(total),
     })
 st.dataframe(pd.DataFrame(loss_data), use_container_width=True, hide_index=True)
-st.caption("※ 보관료와 미판매 GP는 임시 추정값.")
+st.caption("※ 보관료와 미판매 GP는 임시 추정값. 정확한 데이터로 갱신 시 합계도 재계산됩니다.")
 
-# ============================================================
-# 16. 푸터
-# ============================================================
+# 푸터
 st.markdown("---")
 st.caption(f"데이터 출처: [26년 부진 부동 재고 소진 시트](https://docs.google.com/spreadsheets/d/{SHEET_ID})")
