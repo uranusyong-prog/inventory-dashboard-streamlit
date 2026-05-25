@@ -229,29 +229,23 @@ def parse_sheet(df):
         sku_8col[code]["base"] += base
         sku_8col[code]["current"] += current
 
-    # --- 4-4. 18컬럼 위험점수·유통기한 ---
-    # 산식: 잔존유통기한 점수(≤12M·10, ≤18M·5, ≤24M·2, 그외·1) × 가용재고 × 원가 ÷ 100,000
-    def remain_score(months):
-        if months is None or months <= 0:
-            return 1
-        if months <= 12: return 10
-        if months <= 18: return 5
-        if months <= 24: return 2
-        return 1
-
-    expiry_rows_by_code = defaultdict(list)  # [(exp_date, remaining_months, avail), ...]
-    expiry_by_code = defaultdict(list)
+    # --- 4-4. 18컬럼 "현재고 업데이트" 영역 매핑 ---
+    # A(0)=상품코드, D(3)=유통기한, E(4)=가용재고, F(5)=잔존월수, K(10)=위험점수
+    expiry_by_code = defaultdict(list)        # [(YYYY-MM, avail), ...]
+    expiry_rows_by_code = defaultdict(list)   # [(exp_date_raw, remaining, avail), ...]
     near_expiry_by_code = defaultdict(int)
     total_near_6m = 0
+    score_by_code = {}
     for row in rows:
         if len(row) != 18:
             continue
         code = str(row[0]).strip()
         if not re.match(r"^B\w+", code):
             continue
-        avail = int(to_num(row[3]))
-        exp_date = str(row[4]).strip()
-        remaining = to_num(row[5])
+        exp_date = str(row[3]).strip()        # D열: 유통기한
+        avail = int(to_num(row[4]))           # E열: 가용재고
+        remaining = to_num(row[5])            # F열: 잔존월수
+        total_score = to_num(row[10])         # K열: 위험점수 (시트 계산값)
         if exp_date and avail > 0:
             m = exp_date[:7] if re.match(r"^\d{4}-\d{2}", exp_date) else exp_date
             expiry_by_code[code].append((m, avail))
@@ -259,23 +253,9 @@ def parse_sheet(df):
             if remaining and remaining <= 6:
                 near_expiry_by_code[code] += avail
                 total_near_6m += avail
-
-    # 위험점수 계산 (단가는 dormant_items의 amount/avail 기준, 추후 classify에서 보정)
-    score_by_code = {}
-    unit_cost_by_code = {}
-    for it in dormant_items:
-        if it["avail"] > 0 and it["amount"] > 0:
-            unit_cost_by_code[it["code"]] = it["amount"] / it["avail"]
-    for code, lst in expiry_rows_by_code.items():
-        cost = unit_cost_by_code.get(code, 0)
-        if cost <= 0:
-            continue
-        total = 0
-        for _, rem, av in lst:
-            total += remain_score(rem) * av * cost
-        score = int(round(total / 100000))
-        if score > 0:
-            score_by_code[code] = score
+        if total_score > 0:
+            # 같은 코드가 여러 라인일 때 합산 (시트의 K열은 라인별 점수)
+            score_by_code[code] = score_by_code.get(code, 0) + int(round(total_score))
 
     expiry_clean = {}
     for code, lst in expiry_by_code.items():
@@ -557,48 +537,72 @@ def fmt_eok(v):
         return "-"
     return f"{float(v)/1e8:.2f}억원"
 
-detail_df = pd.DataFrame([{
-    "위험도": r["level"], "부서": r["dept"], "상품코드": r["code"], "상품명": r["name"],
-    "가용재고": f'{r["avail"]:,}',
-    "소진율": f'{r["rate"]*100:.1f}%',
-    "금액": fmt_eok(r["amount"]),
-    "위험점수": f'{r["score"]:,}',
-} for r in priority])
+# 행 클릭 시 펼치는 UI 스타일
+st.markdown("""
+<style>
+  .detail-header { display: grid; grid-template-columns: 80px 90px 110px 1fr 110px 110px 80px 110px 90px;
+                   gap: 8px; padding: 10px 12px; background: #F9FAFB; border-radius: 6px;
+                   font-weight: 700; font-size: 13px; color: #444; margin: 8px 0 4px; }
+  .detail-header div { text-align: right; }
+  .detail-header div:nth-child(1),
+  .detail-header div:nth-child(2),
+  .detail-header div:nth-child(3),
+  .detail-header div:nth-child(4) { text-align: left; }
+  .badge-emer { background: #FEECEC; color: #B91C1C; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
+  .badge-warn { background: #FEF6E0; color: #92400E; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
+  .badge-caut { background: #F4F4F5; color: #555;    padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 12px; }
+</style>
+""", unsafe_allow_html=True)
 
-# 비상=빨강 / 경고=노랑 톤 행 하이라이트
-def _highlight_row(row):
-    if row["위험도"] == "비상":
-        return ["background-color: #FEECEC; color: #B91C1C; font-weight: 600"] * len(row)
-    if row["위험도"] == "경고":
-        return ["background-color: #FEF6E0; color: #92400E"] * len(row)
-    return [""] * len(row)
+# 헤더 행
+st.markdown(
+    '<div class="detail-header">'
+    '<div>위험도</div><div>부서</div><div>상품코드</div><div>상품명</div>'
+    '<div>가용재고</div><div>출고수량</div><div>소진율</div><div>금액</div><div>위험점수</div>'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
-styled = detail_df.style.apply(_highlight_row, axis=1)
-st.dataframe(styled, use_container_width=True, hide_index=True)
+def _badge(level):
+    if level == "비상":
+        return '<span class="badge-emer">비상</span>'
+    if level == "경고":
+        return '<span class="badge-warn">경고</span>'
+    return '<span class="badge-caut">주의</span>'
 
-# --- 유통기한 펼쳐 보기 ---
-st.markdown("##### 🔎 SKU별 유통기한 상세 (펼쳐 보기)")
-st.caption("위험점수 순으로 비상·경고 등급 품목의 월별 유통기한 잔여 수량을 확인할 수 있습니다.")
 for r in priority:
-    if r["level"] not in ("비상", "경고"):
-        continue
-    badge = "🔴 비상" if r["level"] == "비상" else "🟡 경고"
-    with st.expander(
-        f'{badge}  {r["code"]} · {r["name"]} · 위험점수 {r["score"]:,} · 금액 {fmt_eok(r["amount"])}'
-    ):
+    # expander label은 plain text만 지원 → 그리드 컬럼은 expander 내부에 다시 그리고,
+    # label에는 한 줄짜리 요약을 넣는다.
+    label = (
+        f'  [{r["level"]}]  {r["dept"]:<6}  {r["code"]:<10}  {r["name"]}'
+        f'   |  가용 {r["avail"]:,} EA  ·  출고 {r["shipped"]:,} EA'
+        f'  ·  소진율 {r["rate"]*100:.1f}%  ·  {fmt_eok(r["amount"])}  ·  위험점수 {r["score"]:,}'
+    )
+    with st.expander(label, expanded=False):
+        # 상단 메타 한 줄 (HTML로 색 강조)
+        st.markdown(
+            f'<div style="margin-bottom:8px">'
+            f'{_badge(r["level"])} &nbsp; '
+            f'<b>{r["code"]}</b> · {r["name"]} · '
+            f'부서 <b>{r["dept"]}</b> · 가용재고 <b>{r["avail"]:,} EA</b> · '
+            f'출고수량 <b>{r["shipped"]:,} EA</b> · 소진율 <b>{r["rate"]*100:.1f}%</b> · '
+            f'금액 <b>{fmt_eok(r["amount"])}</b> · 위험점수 <b>{r["score"]:,}</b>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f'{r["name"]} · 유통기한별 재고')
         exp_list = r.get("expiry", [])
         if exp_list:
             exp_df = pd.DataFrame(exp_list, columns=["유통기한(월)", "가용재고"])
             exp_df = exp_df.groupby("유통기한(월)", as_index=False)["가용재고"].sum()
             exp_df = exp_df.sort_values("유통기한(월)")
-            exp_df["가용재고"] = exp_df["가용재고"].apply(lambda x: f"{int(x):,}")
+            exp_df["가용재고"] = exp_df["가용재고"].apply(lambda x: f"{int(x):,} EA")
             st.dataframe(exp_df, use_container_width=True, hide_index=True)
         else:
             st.info("유통기한 데이터가 없습니다.")
-        st.caption(
-            f"부서 {r['dept']} · 가용재고 {r['avail']:,} EA · "
-            f"소진율 {r['rate']*100:.1f}% · 유통기한 6개월 이내 {r.get('near_expiry', 0):,} EA"
-        )
+        near = r.get("near_expiry", 0)
+        if near:
+            st.caption(f"※ 유통기한 6개월 이내 임박 수량: {near:,} EA")
 
 # ============================================================
 # 14. 부서별 4주 출고 추이 + Top/Bottom 5
@@ -609,28 +613,28 @@ for d in sorted(by_dept.keys()):
     items_d = [i for i in dormant_items if i["dept"] == d]
     if items_d:
         trend_data.append({"부서": d, "4주 출고(EA)": sum(i["ship4w"] for i in items_d)})
-trend_df = pd.DataFrame(trend_data)
-st.bar_chart(trend_df.set_index("부서"))
+if trend_data:
+    trend_df = pd.DataFrame(trend_data)
+    fig_trend = px.bar(trend_df, x="부서", y="4주 출고(EA)", text="4주 출고(EA)")
+    fig_trend.update_traces(marker_color="#3B82F6", textposition="outside")
+    fig_trend.update_layout(height=320, margin=dict(l=20, r=20, t=10, b=20), yaxis_title="EA")
+    st.plotly_chart(fig_trend, use_container_width=True)
 
-col_t, col_b2 = st.columns(2)
-with col_t:
-    st.subheader("🚀 소진율 Top 5 (우수)")
-    valid = [i for i in dormant_items if i["base"] > 0 and i["rate"] < 0.9]
-    by_w4 = sorted(valid, key=lambda x: -(x["ship4w"] / x["base"]))[:5]
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown("##### 🚀 4주 출고 Top 5 (부진 SKU)")
+    top5 = sorted(dormant_items, key=lambda x: -x["ship4w"])[:5]
     st.dataframe(pd.DataFrame([{
-        "상품명": i["name"][:30], "부서": i["dept"],
-        "4주 출고(EA)": i["ship4w"],
-        "4주 소진율": f'{i["ship4w"]/i["base"]*100:.1f}%',
-    } for i in by_w4]), use_container_width=True, hide_index=True)
-
-with col_b2:
-    st.subheader("⚠️ 소진율 Bottom 5 (조치)")
-    by_w4_low = sorted(valid, key=lambda x: x["ship4w"] / x["base"])[:5]
+        "상품코드": i["code"], "상품명": i["name"],
+        "4주 출고": f'{i["ship4w"]:,}', "부서": i["dept"]
+    } for i in top5]), use_container_width=True, hide_index=True)
+with c2:
+    st.markdown("##### 🛑 4주 출고 Bottom 5 (정체 SKU)")
+    bot5 = sorted(dormant_items, key=lambda x: x["ship4w"])[:5]
     st.dataframe(pd.DataFrame([{
-        "상품명": i["name"][:30], "부서": i["dept"],
-        "4주 출고(EA)": i["ship4w"],
-        "4주 소진율": f'{i["ship4w"]/i["base"]*100:.1f}%',
-    } for i in by_w4_low]), use_container_width=True, hide_index=True)
+        "상품코드": i["code"], "상품명": i["name"],
+        "4주 출고": f'{i["ship4w"]:,}', "부서": i["dept"]
+    } for i in bot5]), use_container_width=True, hide_index=True)
 
 # ============================================================
 # 15. 손실 비용 (추정)
