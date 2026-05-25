@@ -254,8 +254,9 @@ def parse_sheet(df):
                 near_expiry_by_code[code] += avail
                 total_near_6m += avail
         if total_score > 0:
-            # 같은 코드가 여러 라인일 때 합산 (시트의 K열은 라인별 점수)
-            score_by_code[code] = score_by_code.get(code, 0) + int(round(total_score))
+            # 시트의 K열은 SUMIF로 이미 항목별 합계 → 코드당 한 번만 채택
+            # 라인마다 같은 값이 반복되므로 max로 안전하게 보존
+            score_by_code[code] = max(score_by_code.get(code, 0), int(round(total_score)))
 
     expiry_clean = {}
     for code, lst in expiry_by_code.items():
@@ -593,11 +594,21 @@ for r in priority:
         st.caption(f'{r["name"]} · 유통기한별 재고')
         exp_list = r.get("expiry", [])
         if exp_list:
-            exp_df = pd.DataFrame(exp_list, columns=["유통기한(월)", "가용재고"])
-            exp_df = exp_df.groupby("유통기한(월)", as_index=False)["가용재고"].sum()
-            exp_df = exp_df.sort_values("유통기한(월)")
-            exp_df["가용재고"] = exp_df["가용재고"].apply(lambda x: f"{int(x):,} EA")
-            st.dataframe(exp_df, use_container_width=True, hide_index=True)
+            # YYYY-MM 단위로 합산
+            agg = defaultdict(int)
+            for m, q in exp_list:
+                key = str(m)[:7] if re.match(r"^\d{4}-\d{2}", str(m)) else str(m)
+                agg[key] += int(q)
+            # 정렬해서 "YYYY-MM   —   X,XXX EA" 한 줄씩 출력
+            lines_html = []
+            for key in sorted(agg.keys()):
+                lines_html.append(
+                    f'<div style="display:flex; gap:24px; padding:3px 0; font-size:13.5px;">'
+                    f'<span style="min-width:90px; color:#374151;">{key}</span>'
+                    f'<span style="color:#111; font-weight:600;">{agg[key]:,} EA</span>'
+                    f'</div>'
+                )
+            st.markdown("".join(lines_html), unsafe_allow_html=True)
         else:
             st.info("유통기한 데이터가 없습니다.")
         near = r.get("near_expiry", 0)
