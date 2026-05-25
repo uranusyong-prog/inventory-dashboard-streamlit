@@ -19,13 +19,18 @@ st.set_page_config(
 # 설정 — 시트 ID 와 시트 GID
 # ============================================================
 SHEET_ID = "1agL_qDqdc6NicnaBI50J12tebDxe-TspjJRkzh4K6WA"
-# 시트가 "웹에 게시"되어 있어야 함. CSV export URL 사용:
-EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
+# 시트가 "웹에 게시(파일 → 공유 → 웹에 게시 → CSV)"되어 있어야 함.
+# pub?output=csv 형식은 인증 없이 익명 GET 가능 (401 회피).
+EXPORT_URL = (
+    "https://docs.google.com/spreadsheets/d/e/"
+    "2PACX-1vRT7vP8ND1zE_SQEAr_Ox6F5MgfNxldetfTJ9x8IOCjYlTE9a-mot83vUV6SJ4OkvDdpM15saxIMU3Y"
+    "/pub?output=csv"
+)
 
 # ============================================================
-# 데이터 로딩 — 5분 캐시
+# 데이터 로딩 — 24시간 캐시 (하루 1회 갱신)
 # ============================================================
-@st.cache_data(ttl=300, show_spinner="시트에서 데이터를 읽는 중…")
+@st.cache_data(ttl=86400, show_spinner="시트에서 데이터를 읽는 중…")
 def load_sheet():
     df = pd.read_csv(EXPORT_URL, header=None, dtype=str, keep_default_na=False)
     return df
@@ -239,7 +244,7 @@ def fmt_won(v):
 # 메인
 # ============================================================
 st.title("📦 26년 부진·부동 재고 소진 대시보드")
-st.caption("Google Sheets 실시간 연동 · 5분마다 캐시 자동 갱신")
+st.caption("Google Sheets 연동 · 24시간마다 캐시 자동 갱신 (수동 새로고침 가능)")
 
 try:
     df = load_sheet()
