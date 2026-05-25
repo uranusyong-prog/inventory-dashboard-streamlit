@@ -32,8 +32,28 @@ EXPORT_URL = (
 # ============================================================
 @st.cache_data(ttl=86400, show_spinner="시트에서 데이터를 읽는 중…")
 def load_sheet():
-    df = pd.read_csv(EXPORT_URL, header=None, dtype=str, keep_default_na=False)
-    return df
+    """
+    Google Sheet 'pub?output=csv'는 UTF-8로 게시되지만 BOM이 붙는 경우가 있어
+    'utf-8-sig'로 읽어야 안전. 일부 환경에서 CP949로 인식되는 케이스도 있어
+    실패 시 명시적 폴백을 둔다.
+    """
+    last_err = None
+    for enc in ("utf-8-sig", "utf-8", "cp949", "euc-kr"):
+        try:
+            df = pd.read_csv(
+                EXPORT_URL,
+                header=None, dtype=str, keep_default_na=False,
+                encoding=enc,
+            )
+            # 헤더 키워드 중 하나라도 등장하면 OK(인코딩 정상으로 판단)
+            sample = "".join(df.head(20).astype(str).values.flatten().tolist())
+            if any(k in sample for k in ("구분", "상품 코드", "상품코드", "가용재고", "등급")):
+                return df
+            last_err = f"encoding={enc} → 헤더 키워드 미발견"
+        except Exception as e:
+            last_err = f"encoding={enc} 실패: {e}"
+    # 마지막 시도값을 그대로 반환 (디버그 expander가 원인 파악)
+    raise RuntimeError(f"CSV 인코딩 자동 감지 실패: {last_err}")
 
 def to_num(v):
     if v is None or v == "":
@@ -257,6 +277,39 @@ except Exception as e:
 if not data["items"]:
     st.error("메인 데이터를 찾지 못했습니다.")
     st.json(data.get("error", {}))
+
+    # === 디버그: 받아온 데이터 진단 정보 ===
+    with st.expander("🔍 진단 정보 (관리자용)", expanded=True):
+        st.markdown(f"**받아온 데이터 크기**: {df.shape[0]}행 × {df.shape[1]}열")
+        st.markdown(f"**채널 요약 매칭 결과**: {len(data.get('channels', {}))}개")
+        if data.get("channels"):
+            st.json(data["channels"])
+
+        st.markdown("**상위 30행 미리보기**:")
+        st.dataframe(df.head(30))
+
+        # "상품 코드" 또는 "가용재고" 또는 "등급"이 포함된 행 찾기
+        st.markdown("**키워드(상품 코드/가용재고/등급) 포함 행**:")
+        hits = []
+        for i, row in df.iterrows():
+            joined = "|".join(str(c).replace("\n", " ").strip() for c in row.tolist())
+            has_code  = "상품 코드" in joined or "상품코드" in joined
+            has_avail = "가용재고" in joined
+            has_grade = "등급"     in joined
+            if has_code or has_avail or has_grade:
+                hits.append({
+                    "행번호": i,
+                    "상품 코드": "✓" if has_code else "",
+                    "가용재고":  "✓" if has_avail else "",
+                    "등급":     "✓" if has_grade else "",
+                    "내용(앞 200자)": joined[:200],
+                })
+            if len(hits) >= 15:
+                break
+        if hits:
+            st.dataframe(hits)
+        else:
+            st.warning("어느 행에도 '상품 코드', '가용재고', '등급' 키워드가 없습니다. 다른 시트가 게시되었을 가능성이 큽니다.")
     st.stop()
 
 channels = data["channels"]
