@@ -230,7 +230,16 @@ def parse_sheet(df):
         sku_8col[code]["current"] += current
 
     # --- 4-4. 18컬럼 위험점수·유통기한 ---
-    score_by_code = {}
+    # 산식: 잔존유통기한 점수(≤12M·10, ≤18M·5, ≤24M·2, 그외·1) × 가용재고 × 원가 ÷ 100,000
+    def remain_score(months):
+        if months is None or months <= 0:
+            return 1
+        if months <= 12: return 10
+        if months <= 18: return 5
+        if months <= 24: return 2
+        return 1
+
+    expiry_rows_by_code = defaultdict(list)  # [(exp_date, remaining_months, avail), ...]
     expiry_by_code = defaultdict(list)
     near_expiry_by_code = defaultdict(int)
     total_near_6m = 0
@@ -243,16 +252,30 @@ def parse_sheet(df):
         avail = int(to_num(row[3]))
         exp_date = str(row[4]).strip()
         remaining = to_num(row[5])
-        total_score = to_num(row[10])
         if exp_date and avail > 0:
             m = exp_date[:7] if re.match(r"^\d{4}-\d{2}", exp_date) else exp_date
             expiry_by_code[code].append((m, avail))
+            expiry_rows_by_code[code].append((exp_date, remaining, avail))
             if remaining and remaining <= 6:
                 near_expiry_by_code[code] += avail
                 total_near_6m += avail
-        if total_score > 0:
-            # 같은 코드가 여러 라인으로 나오면 최댓값을 점수로 채택
-            score_by_code[code] = max(score_by_code.get(code, 0), int(total_score))
+
+    # 위험점수 계산 (단가는 dormant_items의 amount/avail 기준, 추후 classify에서 보정)
+    score_by_code = {}
+    unit_cost_by_code = {}
+    for it in dormant_items:
+        if it["avail"] > 0 and it["amount"] > 0:
+            unit_cost_by_code[it["code"]] = it["amount"] / it["avail"]
+    for code, lst in expiry_rows_by_code.items():
+        cost = unit_cost_by_code.get(code, 0)
+        if cost <= 0:
+            continue
+        total = 0
+        for _, rem, av in lst:
+            total += remain_score(rem) * av * cost
+        score = int(round(total / 100000))
+        if score > 0:
+            score_by_code[code] = score
 
     expiry_clean = {}
     for code, lst in expiry_by_code.items():
@@ -527,10 +550,19 @@ if sel_grade != "전체":
 
 st.subheader(f"위험 품목 상세 ({len(filtered)}건 표시 · 소진율 90% 이상 {excluded_count}건 제외)")
 priority = sorted(filtered, key=lambda x: (-x["score"] if x["score"] > 0 else 0, -x["amount"]))
+
+def fmt_eok(v):
+    """위험 품목 상세 전용 — 항상 억원 단위, 소수점 2자리."""
+    if v is None or v == 0:
+        return "-"
+    return f"{float(v)/1e8:.2f}억원"
+
 detail_df = pd.DataFrame([{
     "위험도": r["level"], "부서": r["dept"], "상품코드": r["code"], "상품명": r["name"],
-    "가용재고": r["avail"], "소진율": f'{r["rate"]*100:.1f}%',
-    "금액": fmt_won(r["amount"]), "위험점수": r["score"],
+    "가용재고": f'{r["avail"]:,}',
+    "소진율": f'{r["rate"]*100:.1f}%',
+    "금액": fmt_eok(r["amount"]),
+    "위험점수": f'{r["score"]:,}',
 } for r in priority])
 
 # 비상=빨강 / 경고=노랑 톤 행 하이라이트
@@ -543,6 +575,30 @@ def _highlight_row(row):
 
 styled = detail_df.style.apply(_highlight_row, axis=1)
 st.dataframe(styled, use_container_width=True, hide_index=True)
+
+# --- 유통기한 펼쳐 보기 ---
+st.markdown("##### 🔎 SKU별 유통기한 상세 (펼쳐 보기)")
+st.caption("위험점수 순으로 비상·경고 등급 품목의 월별 유통기한 잔여 수량을 확인할 수 있습니다.")
+for r in priority:
+    if r["level"] not in ("비상", "경고"):
+        continue
+    badge = "🔴 비상" if r["level"] == "비상" else "🟡 경고"
+    with st.expander(
+        f'{badge}  {r["code"]} · {r["name"]} · 위험점수 {r["score"]:,} · 금액 {fmt_eok(r["amount"])}'
+    ):
+        exp_list = r.get("expiry", [])
+        if exp_list:
+            exp_df = pd.DataFrame(exp_list, columns=["유통기한(월)", "가용재고"])
+            exp_df = exp_df.groupby("유통기한(월)", as_index=False)["가용재고"].sum()
+            exp_df = exp_df.sort_values("유통기한(월)")
+            exp_df["가용재고"] = exp_df["가용재고"].apply(lambda x: f"{int(x):,}")
+            st.dataframe(exp_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("유통기한 데이터가 없습니다.")
+        st.caption(
+            f"부서 {r['dept']} · 가용재고 {r['avail']:,} EA · "
+            f"소진율 {r['rate']*100:.1f}% · 유통기한 6개월 이내 {r.get('near_expiry', 0):,} EA"
+        )
 
 # ============================================================
 # 14. 부서별 4주 출고 추이 + Top/Bottom 5
