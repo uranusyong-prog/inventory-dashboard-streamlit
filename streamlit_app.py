@@ -251,7 +251,8 @@ def parse_sheet(df):
                 near_expiry_by_code[code] += avail
                 total_near_6m += avail
         if total_score > 0:
-            score_by_code[code] = int(total_score)
+            # 같은 코드가 여러 라인으로 나오면 최댓값을 점수로 채택
+            score_by_code[code] = max(score_by_code.get(code, 0), int(total_score))
 
     expiry_clean = {}
     for code, lst in expiry_by_code.items():
@@ -281,23 +282,18 @@ def parse_sheet(df):
         })
 
     # --- 4-6. 등급 분류 ---
+    # 점수 기반 분류만 신뢰 (시트 grade는 무시) → 점수 없으면 amount 환산 점수로 보조 산정
     def classify(it):
         score = score_by_code.get(it["code"])
-        if score is not None:
-            if score > 100:
-                return "비상", score
-            elif score >= 50:
-                return "경고", score
-            else:
-                return "주의", score
-        if it["level"] in ("비상", "경고", "주의"):
-            return it["level"], round(it["amount"] / 100000)
-        a = it["amount"]
-        if a >= 1e8:
-            return "비상", round(a / 100000)
-        if a >= 3e7:
-            return "경고", round(a / 100000)
-        return "주의", round(a / 100000)
+        if score is None:
+            # 점수가 없으면 금액(원)을 10만 단위 환산해서 보조 점수로 사용
+            score = round(it["amount"] / 100000)
+        if score > 100:
+            return "비상", score
+        elif score >= 50:
+            return "경고", score
+        else:
+            return "주의", score
 
     all_items = dormant_items + non_dormant_items
     for it in all_items:
@@ -530,13 +526,23 @@ if sel_grade != "전체":
     filtered = [i for i in filtered if i["level"] == sel_grade]
 
 st.subheader(f"위험 품목 상세 ({len(filtered)}건 표시 · 소진율 90% 이상 {excluded_count}건 제외)")
-priority = sorted(filtered, key=lambda x: (-x["score"] if x["score"] > 0 else 0, -x["amount"]))[:30]
+priority = sorted(filtered, key=lambda x: (-x["score"] if x["score"] > 0 else 0, -x["amount"]))
 detail_df = pd.DataFrame([{
     "위험도": r["level"], "부서": r["dept"], "상품코드": r["code"], "상품명": r["name"],
     "가용재고": r["avail"], "소진율": f'{r["rate"]*100:.1f}%',
     "금액": fmt_won(r["amount"]), "위험점수": r["score"],
 } for r in priority])
-st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+# 비상=빨강 / 경고=노랑 톤 행 하이라이트
+def _highlight_row(row):
+    if row["위험도"] == "비상":
+        return ["background-color: #FEECEC; color: #B91C1C; font-weight: 600"] * len(row)
+    if row["위험도"] == "경고":
+        return ["background-color: #FEF6E0; color: #92400E"] * len(row)
+    return [""] * len(row)
+
+styled = detail_df.style.apply(_highlight_row, axis=1)
+st.dataframe(styled, use_container_width=True, hide_index=True)
 
 # ============================================================
 # 14. 부서별 4주 출고 추이 + Top/Bottom 5
